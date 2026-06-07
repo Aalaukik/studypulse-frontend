@@ -1,21 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState } from 'react';
 import { Eye, EyeOff, BookOpen, Loader2, AlertCircle, ArrowRight } from 'lucide-react';
 import { useAuthStore } from '../../lib/auth';
-
-// ─── Google types ─────────────────────────────────────────────────────────────
-declare global {
-  interface Window {
-    google?: {
-      accounts: {
-        id: {
-          initialize: (config: object) => void;
-          renderButton: (element: HTMLElement, options: object) => void;
-          disableAutoSelect: () => void;
-        };
-      };
-    };
-  }
-}
 
 type AuthMode = 'login' | 'register';
 
@@ -24,73 +9,10 @@ export function AuthScreen() {
   const [form, setForm] = useState({ email: '', name: '', password: '', confirmPassword: '' });
   const [showPw, setShowPw] = useState(false);
   const [fieldError, setFieldError] = useState('');
-  const [googleLoading, setGoogleLoading] = useState(false);
-  const googleBtnRef = useRef<HTMLDivElement>(null);
 
-  const { login, register, googleLogin, isLoading, error, clearError } = useAuthStore();
+  const { login, register, isLoading, error, clearError } = useAuthStore();
 
-  // ─── Load Google GSI script and render button ────────────────────────────
-  useEffect(() => {
-    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-    if (!clientId) return; // Google login disabled if no client ID
-
-    const existingScript = document.getElementById('google-gsi');
-    if (existingScript) {
-      initGoogleButton();
-      return;
-    }
-
-    const script = document.createElement('script');
-    script.id    = 'google-gsi';
-    script.src   = 'https://accounts.google.com/gsi/client';
-    script.async = true;
-    script.defer = true;
-    script.onload = initGoogleButton;
-    document.head.appendChild(script);
-  }, []);
-
-  // Re-render button when mode changes (DOM ref changes)
-  useEffect(() => {
-    if (window.google && googleBtnRef.current) {
-      initGoogleButton();
-    }
-  }, [mode]);
-
-  function initGoogleButton() {
-    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-    if (!clientId || !window.google || !googleBtnRef.current) return;
-
-    window.google.accounts.id.initialize({
-      client_id: clientId,
-      callback:  handleGoogleCredential,
-      auto_select: false,
-    });
-
-    window.google.accounts.id.renderButton(googleBtnRef.current, {
-      theme:       'filled_black',
-      size:        'large',
-      text:        'continue_with',
-      shape:       'rectangular',
-      logo_alignment: 'left',
-      width:       googleBtnRef.current.offsetWidth || 320,
-    });
-  }
-
-  async function handleGoogleCredential(response: { credential: string }) {
-    setGoogleLoading(true);
-    clearError();
-    setFieldError('');
-    try {
-      await googleLogin(response.credential);
-    } catch (err: any) {
-      setFieldError(err.message || 'Google sign-in failed. Please try again.');
-    } finally {
-      setGoogleLoading(false);
-    }
-  }
-
-  // ─── Field helpers ────────────────────────────────────────────────────────
-  const setField = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) => {
+  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) => {
     setForm(p => ({ ...p, [k]: e.target.value }));
     clearError();
     setFieldError('');
@@ -101,24 +23,18 @@ export function AuthScreen() {
     setFieldError('');
 
     if (mode === 'register') {
-      if (!form.name.trim())          { setFieldError('Name is required'); return; }
-      if (form.password.length < 6)   { setFieldError('Password must be at least 6 characters'); return; }
+      if (!form.name.trim()) { setFieldError('Name is required'); return; }
+      if (form.password.length < 6) { setFieldError('Password must be at least 6 characters'); return; }
       if (form.password !== form.confirmPassword) { setFieldError('Passwords do not match'); return; }
-      try { await register(form.email, form.name.trim(), form.password); } catch { /* shown from store */ }
+      try { await register(form.email, form.name.trim(), form.password); }
+      catch { /* error shown from store */ }
     } else {
-      try { await login(form.email, form.password); } catch { /* shown from store */ }
+      try { await login(form.email, form.password); }
+      catch { /* error shown from store */ }
     }
   };
 
-  const switchMode = (m: AuthMode) => {
-    setMode(m);
-    clearError();
-    setFieldError('');
-  };
-
-  const displayError   = fieldError || error;
-  const googleEnabled  = !!import.meta.env.VITE_GOOGLE_CLIENT_ID;
-  const formLoading    = isLoading || googleLoading;
+  const displayError = fieldError || error;
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4" style={{ background: 'var(--bg-primary)' }}>
@@ -149,11 +65,11 @@ export function AuthScreen() {
         <div className="glass rounded-2xl p-8" style={{ border: '1px solid rgba(255,255,255,0.1)' }}>
 
           {/* Tab switch */}
-          <div className="flex bg-white/5 rounded-xl p-1 mb-7">
+          <div className="flex bg-white/5 rounded-xl p-1 mb-6">
             {(['login', 'register'] as AuthMode[]).map(m => (
               <button
                 key={m}
-                onClick={() => switchMode(m)}
+                onClick={() => { setMode(m); clearError(); setFieldError(''); }}
                 className="flex-1 py-2 rounded-lg text-sm font-semibold transition-all capitalize"
                 style={mode === m
                   ? { background: 'linear-gradient(135deg,#10b981,#059669)', color: '#fff', boxShadow: '0 2px 10px rgba(16,185,129,0.3)' }
@@ -164,34 +80,45 @@ export function AuthScreen() {
             ))}
           </div>
 
-          {/* Google Sign-In Button */}
-          {googleEnabled && (
-            <>
-              <div
-                ref={googleBtnRef}
-                className="w-full mb-4"
-                style={{ minHeight: 44, opacity: formLoading ? 0.6 : 1, pointerEvents: formLoading ? 'none' : 'auto' }}
-              />
+          {/* Google OAuth Button */}
+          <button
+            type="button"
+            className="w-full flex items-center justify-center gap-3 py-3 rounded-xl text-sm font-medium transition-all mb-5 hover:scale-[1.01] active:scale-[0.99]"
+            style={{
+              background: 'rgba(255,255,255,0.06)',
+              border: '1px solid rgba(255,255,255,0.12)',
+              color: '#e2e8f0',
+            }}
+            onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.1)')}
+            onMouseLeave={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.06)')}
+          >
+            {/* Google SVG icon — coloured, small */}
+            <svg width="18" height="18" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+              <path fill="#EA4335" d="M24 9.5c3.14 0 5.95 1.08 8.17 2.86l6.1-6.1C34.46 3.1 29.5 1 24 1 14.82 1 7.07 6.48 3.72 14.26l7.1 5.52C12.43 13.67 17.76 9.5 24 9.5z"/>
+              <path fill="#4285F4" d="M46.52 24.5c0-1.64-.15-3.22-.42-4.75H24v9h12.68c-.55 2.95-2.2 5.45-4.68 7.13l7.18 5.58C43.38 37.32 46.52 31.38 46.52 24.5z"/>
+              <path fill="#FBBC05" d="M10.82 28.22A14.6 14.6 0 0 1 9.5 24c0-1.47.25-2.89.7-4.22l-7.1-5.52A23.94 23.94 0 0 0 0 24c0 3.86.93 7.5 2.57 10.72l8.25-6.5z"/>
+              <path fill="#34A853" d="M24 47c5.5 0 10.12-1.82 13.5-4.95l-7.18-5.58c-1.88 1.26-4.3 2.03-6.32 2.03-6.24 0-11.57-4.17-13.18-9.78l-8.25 6.5C7.07 41.52 14.82 47 24 47z"/>
+              <path fill="none" d="M0 0h48v48H0z"/>
+            </svg>
+            Continue with Google
+          </button>
 
-              {/* Divider */}
-              <div className="flex items-center gap-3 mb-5">
-                <div className="flex-1 h-px" style={{ background: 'rgba(255,255,255,0.08)' }} />
-                <span className="text-xs text-slate-500 font-medium">or continue with email</span>
-                <div className="flex-1 h-px" style={{ background: 'rgba(255,255,255,0.08)' }} />
-              </div>
-            </>
-          )}
+          {/* Divider */}
+          <div className="flex items-center gap-3 mb-5">
+            <div className="flex-1 h-px" style={{ background: 'rgba(255,255,255,0.08)' }} />
+            <span className="text-xs text-slate-500">or continue with email</span>
+            <div className="flex-1 h-px" style={{ background: 'rgba(255,255,255,0.08)' }} />
+          </div>
 
           {/* Error banner */}
           {displayError && (
             <div className="flex items-center gap-2 p-3 rounded-xl mb-4 text-sm animate-fade-in"
               style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)', color: '#fca5a5' }}>
               <AlertCircle size={15} className="flex-shrink-0" />
-              <span>{displayError}</span>
+              {displayError}
             </div>
           )}
 
-          {/* Email / Password Form */}
           <form onSubmit={handleSubmit} className="space-y-4">
             {mode === 'register' && (
               <div>
@@ -200,7 +127,7 @@ export function AuthScreen() {
                   className="input-dark"
                   placeholder="Your name"
                   value={form.name}
-                  onChange={setField('name')}
+                  onChange={set('name')}
                   autoComplete="name"
                   required
                 />
@@ -214,7 +141,7 @@ export function AuthScreen() {
                 className="input-dark"
                 placeholder="you@example.com"
                 value={form.email}
-                onChange={setField('email')}
+                onChange={set('email')}
                 autoComplete="email"
                 required
               />
@@ -228,7 +155,7 @@ export function AuthScreen() {
                   className="input-dark pr-10"
                   placeholder={mode === 'register' ? 'At least 6 characters' : 'Your password'}
                   value={form.password}
-                  onChange={setField('password')}
+                  onChange={set('password')}
                   autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
                   required
                 />
@@ -250,7 +177,7 @@ export function AuthScreen() {
                   className="input-dark"
                   placeholder="Repeat password"
                   value={form.confirmPassword}
-                  onChange={setField('confirmPassword')}
+                  onChange={set('confirmPassword')}
                   autoComplete="new-password"
                   required
                 />
@@ -259,11 +186,11 @@ export function AuthScreen() {
 
             <button
               type="submit"
-              disabled={formLoading}
+              disabled={isLoading}
               className="btn-primary w-full py-3 flex items-center justify-center gap-2 mt-2"
-              style={{ opacity: formLoading ? 0.7 : 1 }}
+              style={{ opacity: isLoading ? 0.7 : 1 }}
             >
-              {formLoading
+              {isLoading
                 ? <><Loader2 size={18} className="animate-spin" /> Please wait…</>
                 : <>{mode === 'login' ? 'Sign In' : 'Create Account'}<ArrowRight size={16} /></>
               }
@@ -272,8 +199,8 @@ export function AuthScreen() {
 
           <p className="text-center text-xs text-slate-500 mt-6">
             {mode === 'login'
-              ? <>Don't have an account? <button onClick={() => switchMode('register')} className="text-emerald-400 hover:text-emerald-300">Sign up free</button></>
-              : <>Already have an account? <button onClick={() => switchMode('login')} className="text-emerald-400 hover:text-emerald-300">Sign in</button></>
+              ? <>Don't have an account? <button onClick={() => setMode('register')} className="text-emerald-400 hover:text-emerald-300">Sign up free</button></>
+              : <>Already have an account? <button onClick={() => setMode('login')} className="text-emerald-400 hover:text-emerald-300">Sign in</button></>
             }
           </p>
         </div>
