@@ -11,6 +11,7 @@ export interface AuthUser {
   bestStreak:       number;
   dailyTargetType:  string;
   dailyTargetValue: number;
+  authProvider:     string;
 }
 
 interface AuthState {
@@ -19,12 +20,13 @@ interface AuthState {
   error:       string | null;
   isLoggedIn:  boolean;
 
-  login:    (email: string, password: string)               => Promise<void>;
-  register: (email: string, name: string, password: string) => Promise<void>;
-  logout:   ()                                              => Promise<void>;
-  refresh:  ()                                              => Promise<boolean>;
-  updateProfile: (data: Partial<AuthUser>)                  => Promise<void>;
-  clearError: ()                                            => void;
+  login:       (email: string, password: string)               => Promise<void>;
+  register:    (email: string, name: string, password: string) => Promise<void>;
+  googleLogin: (credential: string)                            => Promise<void>;
+  logout:      ()                                              => Promise<void>;
+  refresh:     ()                                              => Promise<boolean>;
+  updateProfile: (data: Partial<AuthUser>)                     => Promise<void>;
+  clearError:  ()                                              => void;
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
@@ -63,12 +65,25 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
+  // ─── Google Login ────────────────────────────────────────────────────────────
+  googleLogin: async (credential) => {
+    set({ isLoading: true, error: null });
+    try {
+      const data = await authApi.googleLogin(credential);
+      tokenStore.setAccess(data.accessToken);
+      tokenStore.setRefresh(data.refreshToken);
+      tokenStore.setUserId(data.user.id);
+      set({ user: data.user, isLoggedIn: true, isLoading: false });
+    } catch (err: any) {
+      set({ error: err.message || 'Google sign-in failed', isLoading: false });
+      throw err;
+    }
+  },
+
   // ─── Logout ─────────────────────────────────────────────────────────────────
   logout: async () => {
     const refresh = tokenStore.getRefresh();
-    if (refresh) {
-      authApi.logout(refresh).catch(() => {});
-    }
+    if (refresh) authApi.logout(refresh).catch(() => {});
     tokenStore.clear();
     set({ user: null, isLoggedIn: false });
   },
