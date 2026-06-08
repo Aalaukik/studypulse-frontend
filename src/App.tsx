@@ -41,7 +41,14 @@ function ViewRenderer() {
 
 export default function App() {
   const { user, isLoading, isLoggedIn, logout, refresh } = useAuthStore();
-  const { loadAll, onboardingComplete, setUser } = useAppStore();
+  const {
+    loadAll,
+    onboardingComplete,
+    setUser,
+    subjects,
+    loading,
+    resetStore,
+  } = useAppStore();
 
   // ── On mount: restore session from refresh token ───────────────────────────
   useEffect(() => {
@@ -58,6 +65,14 @@ export default function App() {
     if (isLoggedIn) loadAll();
   }, [isLoggedIn]);
 
+  // ── When user logs out: clear the persisted app store (onboardingComplete etc.)
+  // This prevents a different user logging in on the same device and skipping onboarding.
+  useEffect(() => {
+    if (!isLoggedIn) {
+      resetStore();
+    }
+  }, [isLoggedIn]);
+
   // ── Listen for forced logout (expired tokens) ─────────────────────────────
   useEffect(() => {
     const handler = () => logout();
@@ -71,8 +86,14 @@ export default function App() {
   // ── Auth required ──────────────────────────────────────────────────────────
   if (!isLoggedIn || !user) return <AuthScreen />;
 
-  // ── Onboarding for brand-new users (no subjects yet) ──────────────────────
-  if (!onboardingComplete) return <Onboarding />;
+  // ── FIX C4: Show onboarding only when BOTH the persisted flag is false
+  //    AND subjects haven't loaded yet / are truly empty.
+  //    This means an existing user who refreshes will never get stuck in
+  //    onboarding because their subjects come back from the API.
+  //    We also wait for the subjects load to finish before deciding.
+  const subjectsLoaded = !loading.subjects;
+  const showOnboarding = !onboardingComplete && subjectsLoaded && subjects.length === 0;
+  if (showOnboarding) return <Onboarding />;
 
   // ── Main app ───────────────────────────────────────────────────────────────
   return (

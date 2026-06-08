@@ -1,419 +1,151 @@
-import { create } from 'zustand';
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+// ─── Startup guards ────────────────────────────────────────────────────────────
+// Fail immediately in production if critical secrets are missing.
+// This prevents the app from running with insecure defaults.
+if (process.env.NODE_ENV === 'production') {
+  const required = ['JWT_ACCESS_SECRET', 'JWT_REFRESH_SECRET', 'DATABASE_URL'];
+  const missing  = required.filter(k => !process.env[k]);
+  if (missing.length > 0) {
+    console.error(`FATAL: Missing required environment variables: ${missing.join(', ')}`);
+    process.exit(1);
+  }
+}
+
+import authRouter from './routes/auth';
+import googleAuthRouter from './routes/googleAuth';
+import { subjectsRouter, goalsRouter, reviewCardsRouter } from './routes/core';
 import {
-  subjectsApi, goalsApi, reviewCardsApi, examsApi,
-  sessionsApi, mistakesApi, energyApi, papersApi,
-  weeklyReviewsApi, xpApi, challengesApi,
-} from '../lib/api';
-import { AppView, ReviewRating, Priority } from '../types';
-import { computeSubjectHealth, sm2Update, computeStreak, format, addDays } from '../utils';
-
-// ─── State shape ──────────────────────────────────────────────────────────────
-
-interface LoadingMap { [key: string]: boolean }
-
-interface AppState {
-  // Navigation
-  currentView:  AppView;
-  setView:      (v: AppView) => void;
-
-  // Data (all fetched from API, cached here)
-  subjects:      any[];
-  goals:         any[];
-  reviewCards:   any[];
-  exams:         any[];
-  sessions:      any[];
-  mistakes:      any[];
-  energyLogs:    any[];
-  pastPapers:    any[];
-  weeklyReviews: any[];
-  xpEvents:      any[];
-  activeChallenge: any | null;
-
-  // Loading & error per resource
-  loading: LoadingMap;
-  errors:  Record<string, string | null>;
-
-  // Onboarding flag
-  onboardingComplete: boolean;
-  completeOnboarding: () => void;
-
-  // ── Loaders ────────────────────────────────────────────────────────────────
-  loadAll:        () => Promise<void>;
-  loadSubjects:   () => Promise<void>;
-  loadGoals:      () => Promise<void>;
-  loadReviewCards:() => Promise<void>;
-  loadExams:      () => Promise<void>;
-  loadSessions:   () => Promise<void>;
-  loadMistakes:   () => Promise<void>;
-  loadEnergyLogs: () => Promise<void>;
-  loadPastPapers: () => Promise<void>;
-  loadWeeklyReviews: () => Promise<void>;
-  loadXPEvents:   () => Promise<void>;
-  loadActiveChallenge: () => Promise<void>;
-
-  // ── Subjects ───────────────────────────────────────────────────────────────
-  addSubject:    (name: string) => Promise<void>;
-  removeSubject: (id: string)   => Promise<void>;
-
-  // ── Goals ──────────────────────────────────────────────────────────────────
-  addGoal:    (data: { subjectId: string; title: string; priority: Priority; deadline?: string }) => Promise<void>;
-  completeGoal:(id: string) => Promise<void>;
-  deleteGoal: (id: string)  => Promise<void>;
-  editGoal:   (id: string, data: any) => Promise<void>;
-
-  // ── Review Cards ───────────────────────────────────────────────────────────
-  addReviewCard:    (subjectId: string, topic: string) => Promise<void>;
-  rateReviewCard:   (id: string, rating: ReviewRating) => Promise<void>;
-  deleteReviewCard: (id: string) => Promise<void>;
-  getDueCards:      () => any[];
-
-  // ── Exams ──────────────────────────────────────────────────────────────────
-  addExam:    (data: any) => Promise<void>;
-  deleteExam: (id: string) => Promise<void>;
-
-  // ── Sessions ───────────────────────────────────────────────────────────────
-  activeSession: any | null;
-  startSession:  (mode: string, subjectId?: string) => void;
-  endSession:    (focusRating?: number, distractions?: number) => Promise<void>;
-  logDistraction: () => void;
-  getSessionsToday: () => any[];
-
-  // ── Mistakes ───────────────────────────────────────────────────────────────
-  addMistake:    (data: any) => Promise<void>;
-  deleteMistake: (id: string) => Promise<void>;
-
-  // ── Energy ─────────────────────────────────────────────────────────────────
-  logEnergy:       (level: number) => Promise<void>;
-  logWhatWorked:   (note: string)  => Promise<void>;
-  getTodayEnergyLog: () => any | null;
-
-  // ── Past Papers ────────────────────────────────────────────────────────────
-  addPastPaper:    (data: any) => Promise<void>;
-  deletePastPaper: (id: string) => Promise<void>;
-
-  // ── Weekly Reviews ─────────────────────────────────────────────────────────
-  generateWeeklyReview: () => Promise<void>;
-
-  // ── Challenges ─────────────────────────────────────────────────────────────
-  startChallenge: (data: any)  => Promise<void>;
-  endChallenge:   (id: string) => Promise<void>;
-
-  // ── User helpers ───────────────────────────────────────────────────────────
-  user: any;                  // mirror of authStore user for convenience
-  setUser: (u: any) => void;
-}
-
-// ─── Helper: set loading flag ─────────────────────────────────────────────────
-function setLoading(set: any, key: string, val: boolean) {
-  set((s: AppState) => ({ loading: { ...s.loading, [key]: val } }));
-}
-
-// ─── Store ────────────────────────────────────────────────────────────────────
-export const useAppStore = create<AppState>((set, get) => ({
-
-  currentView: 'dashboard',
-  setView:     (v) => set({ currentView: v }),
-
-  subjects:      [],
-  goals:         [],
-  reviewCards:   [],
-  exams:         [],
-  sessions:      [],
-  mistakes:      [],
-  energyLogs:    [],
-  pastPapers:    [],
-  weeklyReviews: [],
-  xpEvents:      [],
-  activeChallenge: null,
-  activeSession:   null,
-  user:            null,
-
-  loading: {},
-  errors:  {},
-
-  onboardingComplete: false,
-  completeOnboarding: () => set({ onboardingComplete: true }),
-
-  setUser: (u) => set({ user: u }),
-
-  // ── Load all data on login ─────────────────────────────────────────────────
-  loadAll: async () => {
-    await Promise.allSettled([
-      get().loadSubjects(),
-      get().loadGoals(),
-      get().loadReviewCards(),
-      get().loadExams(),
-      get().loadSessions(),
-      get().loadMistakes(),
-      get().loadEnergyLogs(),
-      get().loadPastPapers(),
-      get().loadWeeklyReviews(),
-      get().loadXPEvents(),
-      get().loadActiveChallenge(),
-    ]);
-  },
-
-  // ── Individual loaders ─────────────────────────────────────────────────────
-  loadSubjects: async () => {
-    setLoading(set, 'subjects', true);
-    try { set({ subjects: await subjectsApi.list() }); } catch {}
-    finally { setLoading(set, 'subjects', false); }
-  },
-
-  loadGoals: async () => {
-    setLoading(set, 'goals', true);
-    try { set({ goals: await goalsApi.list() }); } catch {}
-    finally { setLoading(set, 'goals', false); }
-  },
-
-  loadReviewCards: async () => {
-    setLoading(set, 'reviewCards', true);
-    try { set({ reviewCards: await reviewCardsApi.list() }); } catch {}
-    finally { setLoading(set, 'reviewCards', false); }
-  },
-
-  loadExams: async () => {
-    setLoading(set, 'exams', true);
-    try { set({ exams: await examsApi.list() }); } catch {}
-    finally { setLoading(set, 'exams', false); }
-  },
-
-  loadSessions: async () => {
-    setLoading(set, 'sessions', true);
-    try { set({ sessions: await sessionsApi.list({ limit: 200 }) }); } catch {}
-    finally { setLoading(set, 'sessions', false); }
-  },
-
-  loadMistakes: async () => {
-    setLoading(set, 'mistakes', true);
-    try { set({ mistakes: await mistakesApi.list() }); } catch {}
-    finally { setLoading(set, 'mistakes', false); }
-  },
-
-  loadEnergyLogs: async () => {
-    setLoading(set, 'energyLogs', true);
-    try { set({ energyLogs: await energyApi.list() }); } catch {}
-    finally { setLoading(set, 'energyLogs', false); }
-  },
-
-  loadPastPapers: async () => {
-    setLoading(set, 'pastPapers', true);
-    try { set({ pastPapers: await papersApi.list() }); } catch {}
-    finally { setLoading(set, 'pastPapers', false); }
-  },
-
-  loadWeeklyReviews: async () => {
-    setLoading(set, 'weeklyReviews', true);
-    try { set({ weeklyReviews: await weeklyReviewsApi.list() }); } catch {}
-    finally { setLoading(set, 'weeklyReviews', false); }
-  },
-
-  loadXPEvents: async () => {
-    try { set({ xpEvents: await xpApi.list() }); } catch {}
-  },
-
-  loadActiveChallenge: async () => {
-    try { set({ activeChallenge: await challengesApi.active() }); } catch {}
-  },
-
-  // ── Subjects ───────────────────────────────────────────────────────────────
-  addSubject: async (name) => {
-    const colors = ['#10b981','#6366f1','#f59e0b','#ef4444','#3b82f6','#8b5cf6','#ec4899','#14b8a6'];
-    const icons  = ['📚','🔬','📐','🌍','💻','🎨','🏛️','🧬','📊','🎵'];
-    const idx = get().subjects.length % colors.length;
-    const subject = await subjectsApi.create({ name, color: colors[idx], icon: icons[idx] });
-    set(s => ({ subjects: [...s.subjects, subject] }));
-  },
-
-  removeSubject: async (id) => {
-    set(s => ({ subjects: s.subjects.filter(x => x.id !== id) }));   // optimistic
-    await subjectsApi.delete(id);
-  },
-
-  // ── Goals ──────────────────────────────────────────────────────────────────
-  addGoal: async (data) => {
-    const goal = await goalsApi.create(data);
-    set(s => ({ goals: [goal, ...s.goals] }));
-  },
-
-  completeGoal: async (id) => {
-    // Optimistic update
-    set(s => ({
-      goals: s.goals.map(g =>
-        g.id === id ? { ...g, status: 'completed', completedAt: new Date().toISOString() } : g
-      ),
-    }));
-    const updated = await goalsApi.complete(id);
-    set(s => ({ goals: s.goals.map(g => g.id === id ? updated : g) }));
-    // Re-fetch user to get updated xp / streak
-    const { useAuthStore } = await import('./authStoreProxy');
-    useAuthStore.getState().refresh().catch(() => {});
-  },
-
-  deleteGoal: async (id) => {
-    set(s => ({ goals: s.goals.filter(g => g.id !== id) }));          // optimistic
-    await goalsApi.delete(id);
-  },
-
-  editGoal: async (id, data) => {
-    set(s => ({ goals: s.goals.map(g => g.id === id ? { ...g, ...data } : g) }));
-    const updated = await goalsApi.update(id, data);
-    set(s => ({ goals: s.goals.map(g => g.id === id ? updated : g) }));
-  },
-
-  // ── Review Cards ───────────────────────────────────────────────────────────
-  addReviewCard: async (subjectId, topic) => {
-    const card = await reviewCardsApi.create({ subjectId, topic });
-    set(s => ({ reviewCards: [...s.reviewCards, card] }));
-  },
-
-  rateReviewCard: async (id, rating) => {
-    const updated = await reviewCardsApi.rate(id, rating);
-    set(s => ({ reviewCards: s.reviewCards.map(c => c.id === id ? updated : c) }));
-    // Refresh XP events
-    xpApi.list().then(xpEvents => set({ xpEvents })).catch(() => {});
-  },
-
-  deleteReviewCard: async (id) => {
-    set(s => ({ reviewCards: s.reviewCards.filter(c => c.id !== id) }));
-    await reviewCardsApi.delete(id);
-  },
-
-  getDueCards: () => {
-    const today = new Date(); today.setHours(23, 59, 59, 999);
-    return get().reviewCards.filter(c => new Date(c.dueDate) <= today);
-  },
-
-  // ── Exams ──────────────────────────────────────────────────────────────────
-  addExam: async (data) => {
-    const exam = await examsApi.create({ ...data, date: data.date });
-    set(s => ({ exams: [...s.exams, exam] }));
-  },
-
-  deleteExam: async (id) => {
-    set(s => ({ exams: s.exams.filter(e => e.id !== id) }));
-    await examsApi.delete(id);
-  },
-
-  // ── Sessions ───────────────────────────────────────────────────────────────
-  startSession: (mode, subjectId) => {
-    set({
-      activeSession: {
-        id:           `local-${Date.now()}`,
-        startTime:    new Date().toISOString(),
-        mode,
-        distractions: 0,
-        subjectId:    subjectId || null,
-      },
-    });
-  },
-
-  endSession: async (focusRating, distractions) => {
-    const active = get().activeSession;
-    if (!active) return;
-
-    const endTime  = new Date();
-    const duration = Math.round((endTime.getTime() - new Date(active.startTime).getTime()) / 60000);
-
-    const payload = {
-      startTime:    active.startTime,
-      endTime:      endTime.toISOString(),
-      duration:     Math.max(duration, 1),
-      mode:         active.mode,
-      focusRating:  focusRating  ?? undefined,
-      distractions: distractions ?? active.distractions,
-      subjectId:    active.subjectId ?? undefined,
-    };
-
-    set({ activeSession: null });
-
-    try {
-      const session = await sessionsApi.create(payload);
-      set(s => ({ sessions: [session, ...s.sessions] }));
-      if (focusRating) {
-        xpApi.list().then(xpEvents => set({ xpEvents })).catch(() => {});
-      }
-    } catch (err) {
-      console.error('Failed to save session:', err);
-    }
-  },
-
-  logDistraction: () => {
-    set(s => ({
-      activeSession: s.activeSession
-        ? { ...s.activeSession, distractions: (s.activeSession.distractions || 0) + 1 }
-        : null,
-    }));
-  },
-
-  getSessionsToday: () => {
-    const today = format(new Date(), 'yyyy-MM-dd');
-    return get().sessions.filter(s => s.startTime?.startsWith(today));
-  },
-
-  // ── Mistakes ───────────────────────────────────────────────────────────────
-  addMistake: async (data) => {
-    const result = await mistakesApi.create(data);
-    set(s => ({
-      mistakes:    [result.mistake, ...s.mistakes],
-      reviewCards: [...s.reviewCards, result.reviewCard],
-    }));
-    xpApi.list().then(xpEvents => set({ xpEvents })).catch(() => {});
-  },
-
-  deleteMistake: async (id) => {
-    set(s => ({ mistakes: s.mistakes.filter(m => m.id !== id) }));
-    await mistakesApi.delete(id);
-  },
-
-  // ── Energy ─────────────────────────────────────────────────────────────────
-  logEnergy: async (level) => {
-    const log = await energyApi.log(level);
-    const today = format(new Date(), 'yyyy-MM-dd');
-    set(s => ({
-      energyLogs: s.energyLogs.some(l => l.date === today)
-        ? s.energyLogs.map(l => l.date === today ? log : l)
-        : [log, ...s.energyLogs],
-    }));
-  },
-
-  logWhatWorked: async (note) => {
-    const log = await energyApi.whatWorked(note);
-    const today = format(new Date(), 'yyyy-MM-dd');
-    set(s => ({ energyLogs: s.energyLogs.map(l => l.date === today ? log : l) }));
-  },
-
-  getTodayEnergyLog: () => {
-    const today = format(new Date(), 'yyyy-MM-dd');
-    return get().energyLogs.find(l => l.date === today) || null;
-  },
-
-  // ── Past Papers ────────────────────────────────────────────────────────────
-  addPastPaper: async (data) => {
-    const paper = await papersApi.create(data);
-    set(s => ({ pastPapers: [paper, ...s.pastPapers] }));
-  },
-
-  deletePastPaper: async (id) => {
-    set(s => ({ pastPapers: s.pastPapers.filter(p => p.id !== id) }));
-    await papersApi.delete(id);
-  },
-
-  // ── Weekly Reviews ─────────────────────────────────────────────────────────
-  generateWeeklyReview: async () => {
-    const review = await weeklyReviewsApi.generate();
-    set(s => ({ weeklyReviews: [review, ...s.weeklyReviews] }));
-  },
-
-  // ── Challenges ─────────────────────────────────────────────────────────────
-  startChallenge: async (data) => {
-    const challenge = await challengesApi.start(data);
-    set({ activeChallenge: challenge });
-  },
-
-  endChallenge: async (id) => {
-    const completed = await challengesApi.complete(id);
-    set({ activeChallenge: completed });
-    setTimeout(() => set({ activeChallenge: null }), 3000);
+  examsRouter, sessionsRouter, mistakesRouter,
+  energyRouter, papersRouter, weeklyReviewsRouter,
+  xpRouter, challengesRouter,
+} from './routes/features';
+import prisma from './lib/prisma';
+
+const app  = express();
+const PORT = process.env.PORT || 3001;
+
+// ─── Security middleware ───────────────────────────────────────────────────────
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      // Allow Google GSI script for OAuth
+      scriptSrc: ["'self'", 'accounts.google.com', "'unsafe-inline'"],
+      frameSrc:  ["'self'", 'accounts.google.com'],
+    },
   },
 }));
+
+// ─── CORS ─────────────────────────────────────────────────────────────────────
+// Supports exact origins AND simple glob patterns (e.g. https://*.vercel.app).
+// NEVER set FRONTEND_URLS=* in production — list your real Vercel URLs.
+function originMatchesPattern(origin: string, pattern: string): boolean {
+  if (pattern === origin) return true;
+  if (pattern.includes('*')) {
+    // Convert glob to regex: escape dots, replace * with [^.]+ (no subdomain crossing)
+    const escaped = pattern.replace(/\./g, '\\.').replace(/\*/g, '[^.]+');
+    return new RegExp(`^${escaped}$`).test(origin);
+  }
+  return false;
+}
+
+app.use(cors({
+  origin: (origin, cb) => {
+    // Allow server-to-server or same-origin requests (no Origin header)
+    if (!origin) { cb(null, true); return; }
+
+    const patterns = (process.env.FRONTEND_URLS || 'http://localhost:5173')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
+
+    const allowed = patterns.some(p => originMatchesPattern(origin, p));
+    if (allowed) {
+      cb(null, true);
+    } else {
+      cb(new Error(`CORS: origin ${origin} not allowed`));
+    }
+  },
+  credentials: true,
+}));
+
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true }));
+
+// ─── Rate limiting ─────────────────────────────────────────────────────────────
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: { error: 'Too many requests, please try again later' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const apiLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000,
+  max: 100,                  // tightened from 200
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// ─── Routes ────────────────────────────────────────────────────────────────────
+app.use('/api/auth',              authLimiter, authRouter);
+app.use('/api/auth',              authLimiter, googleAuthRouter);  // POST /api/auth/google
+app.use('/api/v1/subjects',       apiLimiter,  subjectsRouter);
+app.use('/api/v1/goals',          apiLimiter,  goalsRouter);
+app.use('/api/v1/review-cards',   apiLimiter,  reviewCardsRouter);
+app.use('/api/v1/exams',          apiLimiter,  examsRouter);
+app.use('/api/v1/sessions',       apiLimiter,  sessionsRouter);
+app.use('/api/v1/mistakes',       apiLimiter,  mistakesRouter);
+app.use('/api/v1/energy',         apiLimiter,  energyRouter);
+app.use('/api/v1/papers',         apiLimiter,  papersRouter);
+app.use('/api/v1/weekly-reviews', apiLimiter,  weeklyReviewsRouter);
+app.use('/api/v1/xp',             apiLimiter,  xpRouter);
+app.use('/api/v1/challenges',     apiLimiter,  challengesRouter);
+
+// ─── Health check ──────────────────────────────────────────────────────────────
+app.get('/health', async (_req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({ status: 'ok', db: 'connected', timestamp: new Date().toISOString() });
+  } catch {
+    res.status(503).json({ status: 'error', db: 'disconnected' });
+  }
+});
+
+// ─── 404 handler ──────────────────────────────────────────────────────────────
+app.use((_req, res) => {
+  res.status(404).json({ error: 'Route not found' });
+});
+
+// ─── Global error handler ──────────────────────────────────────────────────────
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error('Unhandled error:', err);
+  res.status(500).json({ error: 'Internal server error' });
+});
+
+// ─── Start ─────────────────────────────────────────────────────────────────────
+async function main() {
+  try {
+    await prisma.$connect();
+    console.log('✅ Database connected');
+    app.listen(PORT, () => {
+      console.log(`🚀 StudyPulse API running on http://localhost:${PORT}`);
+      console.log(`   ENV: ${process.env.NODE_ENV || 'development'}`);
+    });
+  } catch (err) {
+    console.error('❌ Failed to start:', err);
+    process.exit(1);
+  }
+}
+
+main();
+
+process.on('SIGINT',  async () => { await prisma.$disconnect(); process.exit(0); });
+process.on('SIGTERM', async () => { await prisma.$disconnect(); process.exit(0); });

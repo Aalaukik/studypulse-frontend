@@ -5,12 +5,15 @@ import { Card, Modal, SectionHeader, Badge, EmptyState, ConfirmDialog } from '..
 import { format, parseISO, differenceInDays } from 'date-fns';
 import { getTopicsForToday, SUBJECT_COLORS } from '../../utils';
 
+// FIX C5: The backend stores the field as `examDate` (Prisma DateTime field name).
+// This helper normalises access so old cached data with `date` also works.
+const getExamDate = (exam: any): string => exam.examDate ?? exam.date ?? '';
+
 export function ExamPlanner() {
   const { exams, subjects, addExam, deleteExam, reviewCards } = useAppStore();
-  const [showAdd, setShowAdd] = useState(false);
+  const [showAdd, setShowAdd]   = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
-  const [form, setForm] = useState({ name: '', date: '', subjectIds: [] as string[], topicsText: '' });
-  const [topicInput, setTopicInput] = useState('');
+  const [form, setForm]         = useState({ name: '', date: '', subjectIds: [] as string[], topicsText: '' });
 
   const today = format(new Date(), 'yyyy-MM-dd');
 
@@ -25,12 +28,16 @@ export function ExamPlanner() {
     setShowAdd(false);
   };
 
-  const upcomingExams = exams.filter(e => e.date >= today).sort((a, b) => a.date.localeCompare(b.date));
-  const pastExams = exams.filter(e => e.date < today);
+  const upcomingExams = exams
+    .filter(e => getExamDate(e) >= today)
+    .sort((a, b) => getExamDate(a).localeCompare(getExamDate(b)));
+
+  const pastExams = exams
+    .filter(e => getExamDate(e) < today);
 
   const urgencyColor = (daysLeft: number) => {
-    if (daysLeft <= 3) return '#ef4444';
-    if (daysLeft <= 7) return '#f59e0b';
+    if (daysLeft <= 3)  return '#ef4444';
+    if (daysLeft <= 7)  return '#f59e0b';
     if (daysLeft <= 14) return '#3b82f6';
     return '#10b981';
   };
@@ -61,10 +68,11 @@ export function ExamPlanner() {
             <div className="space-y-4">
               <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Upcoming</h3>
               {upcomingExams.map(exam => {
-                const daysLeft = differenceInDays(parseISO(exam.date), new Date());
-                const color = urgencyColor(daysLeft);
-                const todayTopics = getTopicsForToday(exam.topics, exam.date, reviewCards);
-                const progress = Math.max(0, Math.round((1 - daysLeft / 60) * 100));
+                const examDate    = getExamDate(exam);
+                const daysLeft    = differenceInDays(parseISO(examDate), new Date());
+                const color       = urgencyColor(daysLeft);
+                const todayTopics = getTopicsForToday(exam.topics, examDate, reviewCards);
+                const progress    = Math.max(0, Math.round((1 - daysLeft / 60) * 100));
 
                 return (
                   <Card key={exam.id} className="relative overflow-hidden">
@@ -74,7 +82,7 @@ export function ExamPlanner() {
                       <div className="flex items-start justify-between mb-4">
                         <div>
                           <h3 className="text-lg font-display font-semibold text-white">{exam.name}</h3>
-                          <p className="text-slate-400 text-sm">{format(parseISO(exam.date), 'EEEE, MMMM d, yyyy')}</p>
+                          <p className="text-slate-400 text-sm">{format(parseISO(examDate), 'EEEE, MMMM d, yyyy')}</p>
                         </div>
                         <div className="flex items-center gap-3">
                           <div className="text-right">
@@ -118,7 +126,7 @@ export function ExamPlanner() {
                       <div>
                         <p className="text-xs text-slate-500 mb-2">All topics ({exam.topics.length})</p>
                         <div className="flex flex-wrap gap-1.5">
-                          {exam.topics.map(t => (
+                          {exam.topics.map((t: string) => (
                             <span key={t} className="text-xs px-2 py-0.5 rounded-full text-slate-400"
                               style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}>
                               {t}
@@ -153,7 +161,9 @@ export function ExamPlanner() {
                 <div key={exam.id} className="glass rounded-xl p-4 opacity-50 flex items-center justify-between">
                   <div>
                     <p className="text-white font-medium">{exam.name}</p>
-                    <p className="text-slate-400 text-sm">{format(parseISO(exam.date), 'MMM d, yyyy')}</p>
+                    <p className="text-slate-400 text-sm">
+                      {getExamDate(exam) ? format(parseISO(getExamDate(exam)), 'MMM d, yyyy') : ''}
+                    </p>
                   </div>
                   <button onClick={() => setDeleteId(exam.id)} className="p-2 text-slate-500 hover:text-red-400 transition-colors">
                     <Trash2 size={14} />
