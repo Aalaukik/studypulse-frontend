@@ -1,19 +1,17 @@
 // ─── API Client ───────────────────────────────────────────────────────────────
-// Wraps fetch with auth headers, automatic token refresh, and typed responses.
 
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
-// ─── Token storage ─────────────────────────────────────────────────────────────
 let _accessToken: string | null = null;
 
 export const tokenStore = {
-  getAccess:    ()          => _accessToken,
-  setAccess:    (t: string) => { _accessToken = t; },
-  clearAccess:  ()          => { _accessToken = null; },
+  getAccess:    ()           => _accessToken,
+  setAccess:    (t: string)  => { _accessToken = t; },
+  clearAccess:  ()           => { _accessToken = null; },
 
-  getRefresh:   ()          => localStorage.getItem('sp_refresh'),
-  setRefresh:   (t: string) => localStorage.setItem('sp_refresh', t),
-  clearRefresh: ()          => localStorage.removeItem('sp_refresh'),
+  getRefresh:   ()           => localStorage.getItem('sp_refresh'),
+  setRefresh:   (t: string)  => localStorage.setItem('sp_refresh', t),
+  clearRefresh: ()           => localStorage.removeItem('sp_refresh'),
 
   getUserId:    ()           => localStorage.getItem('sp_uid'),
   setUserId:    (id: string) => localStorage.setItem('sp_uid', id),
@@ -27,6 +25,7 @@ export const tokenStore = {
 };
 
 // ─── Token refresh ─────────────────────────────────────────────────────────────
+
 let refreshPromise: Promise<string | null> | null = null;
 
 async function refreshAccessToken(): Promise<string | null> {
@@ -60,6 +59,7 @@ async function refreshAccessToken(): Promise<string | null> {
 }
 
 // ─── Core fetch wrapper ────────────────────────────────────────────────────────
+
 type FetchOptions = RequestInit & { skipAuth?: boolean; _retry?: boolean };
 
 async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promise<T> {
@@ -110,6 +110,7 @@ const patch = <T>(path: string, data: any) => apiFetch<T>(path, { method: 'PATCH
 const del   = <T>(path: string)            => apiFetch<T>(path, { method: 'DELETE' });
 
 // ─── Auth ──────────────────────────────────────────────────────────────────────
+
 export const authApi = {
   register: (email: string, name: string, password: string) =>
     apiFetch<{ accessToken: string; refreshToken: string; user: any }>(
@@ -119,16 +120,18 @@ export const authApi = {
     apiFetch<{ accessToken: string; refreshToken: string; user: any }>(
       '/api/auth/login', { method: 'POST', skipAuth: true, body: JSON.stringify({ email, password }) }
     ),
-  googleLogin: (credential: string) =>
+  // Sends the Google ID token (credential) returned by the GSI button to our backend
+  googleLogin: (idToken: string) =>
     apiFetch<{ accessToken: string; refreshToken: string; user: any }>(
-      '/api/auth/google', { method: 'POST', skipAuth: true, body: JSON.stringify({ credential }) }
+      '/api/auth/google', { method: 'POST', skipAuth: true, body: JSON.stringify({ idToken }) }
     ),
-  logout:    (refreshToken: string) => post('/api/auth/logout', { refreshToken }),
-  me:        ()                     => get<any>('/api/auth/me'),
-  updateMe:  (data: any)            => patch<any>('/api/auth/me', data),
+  logout:   (refreshToken: string) => post('/api/auth/logout', { refreshToken }),
+  me:       ()                     => get<any>('/api/auth/me'),
+  updateMe: (data: any)            => patch<any>('/api/auth/me', data),
 };
 
 // ─── Subjects ─────────────────────────────────────────────────────────────────
+
 export const subjectsApi = {
   list:   ()                      => get<any[]>('/api/v1/subjects'),
   create: (data: any)             => post<any>('/api/v1/subjects', data),
@@ -137,6 +140,7 @@ export const subjectsApi = {
 };
 
 // ─── Goals ────────────────────────────────────────────────────────────────────
+
 export const goalsApi = {
   list: (params?: { status?: string; subjectId?: string }) => {
     const qs = params ? '?' + new URLSearchParams(params as any).toString() : '';
@@ -149,6 +153,7 @@ export const goalsApi = {
 };
 
 // ─── Review Cards ─────────────────────────────────────────────────────────────
+
 export const reviewCardsApi = {
   list: (params?: { dueOnly?: boolean; subjectId?: string }) => {
     const qs = params ? '?' + new URLSearchParams(params as any).toString() : '';
@@ -160,6 +165,7 @@ export const reviewCardsApi = {
 };
 
 // ─── Exams ────────────────────────────────────────────────────────────────────
+
 export const examsApi = {
   list:   ()           => get<any[]>('/api/v1/exams'),
   create: (data: any)  => post<any>('/api/v1/exams', data),
@@ -167,6 +173,7 @@ export const examsApi = {
 };
 
 // ─── Sessions ─────────────────────────────────────────────────────────────────
+
 export const sessionsApi = {
   list: (params?: { date?: string; limit?: number }) => {
     const qs = params ? '?' + new URLSearchParams(params as any).toString() : '';
@@ -176,6 +183,7 @@ export const sessionsApi = {
 };
 
 // ─── Mistakes ─────────────────────────────────────────────────────────────────
+
 export const mistakesApi = {
   list:   (subjectId?: string) => get<any[]>(`/api/v1/mistakes${subjectId ? `?subjectId=${subjectId}` : ''}`),
   create: (data: any)          => post<any>('/api/v1/mistakes', data),
@@ -183,6 +191,7 @@ export const mistakesApi = {
 };
 
 // ─── Energy ───────────────────────────────────────────────────────────────────
+
 export const energyApi = {
   list:       ()               => get<any[]>('/api/v1/energy'),
   log:        (level: number)  => post<any>('/api/v1/energy', { energyLevel: level }),
@@ -190,6 +199,7 @@ export const energyApi = {
 };
 
 // ─── Past Papers ──────────────────────────────────────────────────────────────
+
 export const papersApi = {
   list:   ()           => get<any[]>('/api/v1/papers'),
   create: (data: any)  => post<any>('/api/v1/papers', data),
@@ -197,17 +207,20 @@ export const papersApi = {
 };
 
 // ─── Weekly Reviews ───────────────────────────────────────────────────────────
+
 export const weeklyReviewsApi = {
   list:     () => get<any[]>('/api/v1/weekly-reviews'),
   generate: () => post<any>('/api/v1/weekly-reviews/generate', {}),
 };
 
 // ─── XP ───────────────────────────────────────────────────────────────────────
+
 export const xpApi = {
   list: () => get<any[]>('/api/v1/xp'),
 };
 
 // ─── Challenges ───────────────────────────────────────────────────────────────
+
 export const challengesApi = {
   active:   ()           => get<any>('/api/v1/challenges/active'),
   start:    (data: any)  => post<any>('/api/v1/challenges', data),

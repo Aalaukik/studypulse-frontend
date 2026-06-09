@@ -15,14 +15,14 @@ export interface AuthUser {
 }
 
 interface AuthState {
-  user:        AuthUser | null;
-  isLoading:   boolean;
-  error:       string | null;
-  isLoggedIn:  boolean;
+  user:       AuthUser | null;
+  isLoading:  boolean;
+  error:      string | null;
+  isLoggedIn: boolean;
 
   login:       (email: string, password: string)               => Promise<void>;
   register:    (email: string, name: string, password: string) => Promise<void>;
-  googleLogin: (credential: string)                            => Promise<void>;
+  googleLogin: (idToken: string)                               => Promise<void>;
   logout:      ()                                              => Promise<void>;
   refresh:     ()                                              => Promise<boolean>;
   updateProfile: (data: Partial<AuthUser>)                     => Promise<void>;
@@ -31,11 +31,11 @@ interface AuthState {
 
 export const useAuthStore = create<AuthState>((set, get) => ({
   user:       null,
-  isLoading:  true,   // true on app boot so we check for existing session
+  isLoading:  true,
   error:      null,
   isLoggedIn: false,
 
-  // ─── Login ──────────────────────────────────────────────────────────────────
+  // ─── Email / password login ───────────────────────────────────────────────
   login: async (email, password) => {
     set({ isLoading: true, error: null });
     try {
@@ -50,7 +50,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
-  // ─── Register ───────────────────────────────────────────────────────────────
+  // ─── Register ─────────────────────────────────────────────────────────────
   register: async (email, name, password) => {
     set({ isLoading: true, error: null });
     try {
@@ -65,22 +65,23 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
-  // ─── Google Login ────────────────────────────────────────────────────────────
-  googleLogin: async (credential) => {
+  // ─── Google OAuth login ───────────────────────────────────────────────────
+  // Called with the credential (ID token) returned by the Google GSI button.
+  googleLogin: async (idToken: string) => {
     set({ isLoading: true, error: null });
     try {
-      const data = await authApi.googleLogin(credential);
+      const data = await authApi.googleLogin(idToken);
       tokenStore.setAccess(data.accessToken);
       tokenStore.setRefresh(data.refreshToken);
       tokenStore.setUserId(data.user.id);
       set({ user: data.user, isLoggedIn: true, isLoading: false });
     } catch (err: any) {
-      set({ error: err.message || 'Google sign-in failed', isLoading: false });
+      set({ error: err.message || 'Google login failed', isLoading: false });
       throw err;
     }
   },
 
-  // ─── Logout ─────────────────────────────────────────────────────────────────
+  // ─── Logout ───────────────────────────────────────────────────────────────
   logout: async () => {
     const refresh = tokenStore.getRefresh();
     if (refresh) authApi.logout(refresh).catch(() => {});
@@ -88,7 +89,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ user: null, isLoggedIn: false });
   },
 
-  // ─── Refresh session on app boot ────────────────────────────────────────────
+  // ─── Refresh session on app boot ──────────────────────────────────────────
   refresh: async () => {
     const refreshToken = tokenStore.getRefresh();
     const userId       = tokenStore.getUserId();
@@ -128,7 +129,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
-  // ─── Update profile ──────────────────────────────────────────────────────────
+  // ─── Update profile ───────────────────────────────────────────────────────
   updateProfile: async (data) => {
     const updated = await authApi.updateMe(data);
     set(s => ({ user: s.user ? { ...s.user, ...updated } : null }));
