@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAppStore } from './store';
 import { useAuthStore } from './lib/auth';
 import { Sidebar } from './components/shared/Sidebar';
@@ -16,7 +16,6 @@ import { ToastContainer } from './components/shared';
 import { Onboarding } from './components/shared/Onboarding';
 import { AuthScreen } from './components/auth/AuthScreen';
 import { AppLoader } from './components/shared/AppLoader';
-import { tokenStore } from './lib/api';
 
 function ViewRenderer() {
   const currentView = useAppStore(s => s.currentView);
@@ -41,14 +40,11 @@ function ViewRenderer() {
 
 export default function App() {
   const { user, isLoading, isLoggedIn, logout, refresh } = useAuthStore();
-  const {
-    loadAll,
-    onboardingComplete,
-    setUser,
-    subjects,
-    loading,
-    resetStore,
-  } = useAppStore();
+  const { loadAll, onboardingComplete, completeOnboarding, setUser } = useAppStore();
+
+  // FIX: track whether initial data fetch has completed to prevent
+  // onboarding flash on refresh for existing users.
+  const [dataLoaded, setDataLoaded] = useState(false);
 
   // ── On mount: restore session from refresh token ───────────────────────────
   useEffect(() => {
@@ -61,15 +57,15 @@ export default function App() {
   }, [user]);
 
   // ── Load all data when user logs in ───────────────────────────────────────
+  // FIX: after loadAll resolves, check subjects to decide if onboarding is
+  // needed. This prevents the state from resetting on every page refresh.
   useEffect(() => {
-    if (isLoggedIn) loadAll();
-  }, [isLoggedIn]);
-
-  // ── When user logs out: clear the persisted app store (onboardingComplete etc.)
-  // This prevents a different user logging in on the same device and skipping onboarding.
-  useEffect(() => {
-    if (!isLoggedIn) {
-      resetStore();
+    if (isLoggedIn) {
+      loadAll().then(() => {
+        const { subjects } = useAppStore.getState();
+        if (subjects.length > 0) completeOnboarding();
+        setDataLoaded(true);
+      });
     }
   }, [isLoggedIn]);
 
@@ -80,20 +76,17 @@ export default function App() {
     return () => window.removeEventListener('auth:logout', handler);
   }, []);
 
-  // ── Boot screen ────────────────────────────────────────────────────────────
+  // ── Auth loading (checking stored refresh token on boot) ──────────────────
   if (isLoading) return <AppLoader />;
 
   // ── Auth required ──────────────────────────────────────────────────────────
   if (!isLoggedIn || !user) return <AuthScreen />;
 
-  // ── FIX C4: Show onboarding only when BOTH the persisted flag is false
-  //    AND subjects haven't loaded yet / are truly empty.
-  //    This means an existing user who refreshes will never get stuck in
-  //    onboarding because their subjects come back from the API.
-  //    We also wait for the subjects load to finish before deciding.
-  const subjectsLoaded = !loading.subjects;
-  const showOnboarding = !onboardingComplete && subjectsLoaded && subjects.length === 0;
-  if (showOnboarding) return <Onboarding />;
+  // ── Data loading (fetching subjects/goals etc. after login) ───────────────
+  if (!dataLoaded) return <AppLoader />;
+
+  // ── Onboarding for brand-new users (no subjects yet) ──────────────────────
+  if (!onboardingComplete) return <Onboarding />;
 
   // ── Main app ───────────────────────────────────────────────────────────────
   return (
